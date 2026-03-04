@@ -1,0 +1,6 @@
+Flask
+Flask-SQLAlchemy
+psycopg2-binary
+openai
+pgvector
+pdfminer.six

@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Flask Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_ENV": "development"
+            },
+            "args": [
+                "run",
+                "--host=localhost",
+                "--port=5000"
+            ],
+            "stopOnEntry": true,
+            "jinja": true,
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        },
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        }
+    ]
+}
