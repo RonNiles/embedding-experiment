@@ -5,6 +5,7 @@ from uuid import uuid4
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 from openai import OpenAI
 from pdfminer.high_level import extract_pages
@@ -53,6 +54,7 @@ class Document(db.Model):
     page_number = db.Column(db.Integer)
     content = db.Column(db.Text, nullable=False)
     embedding = db.Column(Vector(EMBEDDING_DIM))
+    tsv = db.Column(TSVECTOR)
 
 
 class Requests(db.Model):
@@ -240,11 +242,28 @@ def add_document():
     source = data.get("source", "")  # Get the source if provided
     page_number = data.get("page_number")
 
-    doc = Document(content=content, embedding=embedding, source=source, page_number=page_number)
-    db.session.add(doc)
+    result = db.session.execute(
+        text("""
+        INSERT INTO document (content, embedding, source, page_number, tsv)
+        VALUES (
+            :content,
+            :embedding,
+            :source,
+            :page_number,
+            to_tsvector('english', :content)
+        )
+        RETURNING id
+    """),
+    {
+        "content": content,
+        "embedding": embedding,
+        "source": source,
+        "page_number": page_number
+    })
     db.session.commit()
+    doc_id = result.scalar()
 
-    return jsonify({"id": doc.id})
+    return jsonify({"id": doc_id})
 
 @app.route("/ask", methods=["POST"])
 def ask():
@@ -268,15 +287,7 @@ def ask():
     query_embedding = get_embedding(question, source="ask")
 
     # 3️⃣ retrieve RAG context
-    results = db.session.execute(
-        text("""
-        SELECT content
-        FROM document
-        ORDER BY embedding <=> (:query_embedding)::vector
-        LIMIT 5
-        """),
-        {"query_embedding": query_embedding}
-    )
+    results = get_hybrid_search_results(query_embedding, question, top_k=5)
 
     context_chunks = [row.content for row in results]
     context = "\n\n".join(context_chunks)
@@ -325,38 +336,59 @@ def ask():
 
     return {"answer": answer}
 
-@app.route("/search", methods=["POST"])
-def search():
-    data = request.json
-    query = data["query"]
-    top_k = data.get("top_k", 3)
-
-    query_embedding = get_embedding(query, source="search")
-
+def get_hybrid_search_results(query_embedding, query, top_k=5):
+    """Helper function to perform hybrid search and return matches."""
     results = db.session.execute(
-        text(f"""
-        SELECT id, source, page_number, content,
-               1 - (embedding <=> (:query_embedding)::vector) AS similarity
+        text("""
+        SELECT
+            id,
+            source,
+            content,
+
+            1 - (embedding <=> (:embedding)::vector) AS semantic_score,
+
+            ts_rank(tsv, plainto_tsquery(:query)) AS keyword_score,
+
+            (1 - (embedding <=> (:embedding)::vector)) +
+            ts_rank(tsv, plainto_tsquery(:query)) AS hybrid_score
+
         FROM document
-        ORDER BY embedding <=> (:query_embedding)::vector
+
+        WHERE
+            tsv @@ plainto_tsquery(:query)
+            OR embedding <=> (:embedding)::vector < 0.8
+
+        ORDER BY hybrid_score DESC
+
         LIMIT :top_k
         """),
-        {"query_embedding": query_embedding, "top_k": top_k}
+        {
+            "embedding": query_embedding,
+            "query": query,
+            "top_k": top_k
+        }
     )
+    return results
 
+
+@app.route("/search", methods=["POST"])
+def hybrid_search():
+
+    data = request.json
+    query = data["query"]
+    top_k = data.get("top_k", 5)
+
+    query_embedding = get_embedding(query)
+    results = get_hybrid_search_results(query_embedding, query, top_k)
     matches = [
         {
-            "id": row.id,
-            "source": row.source,
-            "page_number": row.page_number,
-            "content": row.content,
-            "similarity": float(row.similarity)
+            "source": r.source,
+            "content": r.content,
+            "score": float(r.hybrid_score)
         }
-        for row in results
+        for r in results
     ]
-
-    return jsonify(matches)
-
+    return {"results": matches}
 
 @app.route("/health", methods=["GET"])
 def health():
