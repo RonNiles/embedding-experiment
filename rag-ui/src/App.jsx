@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { askQuestion, getStatus } from "./api";
+import UploadPDF from "./UploadPDF";
 
 const sessionId = crypto.randomUUID();
 
@@ -61,7 +62,7 @@ export default function App() {
     <div style={styles.container}>
 
       <h2>Local RAG Assistant</h2>
-
+  
       <div style={styles.statusBar}>
         <div style={styles.statusContent}>
           {statusLoading ? (
@@ -117,7 +118,7 @@ export default function App() {
           Send
         </button>
       </div>
-
+      <UploadPDF />
     </div>
   );
 }
