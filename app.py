@@ -3,6 +3,7 @@ import logging
 import os
 from uuid import uuid4
 from flask import Flask, request, jsonify, g
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -12,6 +13,7 @@ from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTTextContainer
 
 app = Flask(__name__)
+CORS(app)
 
 logging.basicConfig(
     filename=os.getenv("LOG_FILE", "app.log"),
