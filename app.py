@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import logging
 import os
 from uuid import uuid4
+from distro import name
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -11,6 +12,9 @@ from pgvector.sqlalchemy import Vector
 from openai import OpenAI
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTTextContainer
+from sentence_transformers import SentenceTransformer
+from torch import cosine_similarity
+
 
 app = Flask(__name__)
 CORS(app)
@@ -64,6 +68,13 @@ class Requests(db.Model):
     object = db.Column(db.JSON, nullable=False)
     type = db.Column(db.String(20), nullable=False)  # embedding / messages / response
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+class Procedures(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text)
+    steps = db.Column(db.JSON)  # List of steps with details
+    embedding = db.Column(Vector(384))
 
 def chunk_text(text, chunk_size=500, overlap=50):
     import re
@@ -197,6 +208,59 @@ def extract_text_by_page(pdf_path):
         if page_text:
             pages.append((page_number, page_text))
     return pages
+
+@app.route("/upload-procedure", methods=["POST"])
+def upload_procedure():
+    data = request.json
+    name = data.get("name")
+    description = data.get("description")
+    steps = data.get("steps", [])
+    if not name or not steps or len(steps) < 2:
+        return {"error": "Name and at least two steps are required"}, 400
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    embedding = model.encode(description).tolist()
+
+    procedure = Procedures(name=name, description=description, steps=steps, embedding=embedding)
+    db.session.add(procedure)
+    db.session.commit()
+
+    return {"status": "success", "id": procedure.id}
+
+@app.route("/ask-procedure", methods=["POST"])
+def ask_procedure():
+    data = request.json
+    question = data["question"]
+
+    app.logger.info(
+        "procedure.request request_id=%s question_chars=%s question_preview=%s",
+        getattr(g, "request_id", "n/a"),
+        len(question or ""),
+        preview_text(question)
+    )
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    question_embedding = model.encode(question).tolist()
+    command = text("""
+    SELECT name, steps
+    FROM procedures
+    ORDER BY embedding <=> (:question_embedding)::vector
+    LIMIT 1
+    """)
+    try:
+        result = db.session.execute(command, {"question_embedding": question_embedding}).fetchone()
+    except Exception as e:
+        app.logger.error(
+            "procedure.error request_id=%s error=%s",
+            getattr(g, "request_id", "n/a"),
+            str(e)
+        )
+        return {"error": "An error occurred while processing the request"}, 500
+
+    if not result:
+        return {"error": "No procedures found"}, 404
+    return {
+        "name": result.name,
+        "steps": result.steps
+    }
 
 @app.route("/upload-pdf", methods=["POST"])
 def upload_pdf():
@@ -406,16 +470,17 @@ def status():
     message_count = db.session.execute(text("SELECT COUNT(*) FROM message")).scalar()
     document_count = db.session.execute(text("SELECT COUNT(*) FROM document")).scalar()
     requests_count = db.session.execute(text("SELECT COUNT(*) FROM requests")).scalar()
+    procedures_count = db.session.execute(text("SELECT COUNT(*) FROM procedures")).scalar()
 
     return jsonify({
         "status": "ok",
         "tables": {
             "message": message_count,
             "document": document_count,
-            "requests": requests_count
+            "requests": requests_count,
+            "procedures": procedures_count
         }
     }), 200
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

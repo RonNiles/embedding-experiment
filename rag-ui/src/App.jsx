@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { askQuestion, getStatus } from "./api";
 import UploadPDF from "./UploadPDF";
+import UploadProcedure from "./UploadProcedure";
+import AskProcedure from "./AskProcedure";
 
 const sessionId = crypto.randomUUID();
 
@@ -75,6 +77,7 @@ export default function App() {
               <span style={styles.statusItem}>Messages: <strong>{status.tables?.message || 0}</strong></span>
               <span style={styles.statusItem}>Documents: <strong>{status.tables?.document || 0}</strong></span>
               <span style={styles.statusItem}>Requests: <strong>{status.tables?.requests || 0}</strong></span>
+              <span style={styles.statusItem}>Procedures: <strong>{status.tables?.procedures || 0}</strong></span>
             </>
           ) : (
             <span>No status available</span>
@@ -85,40 +88,58 @@ export default function App() {
         </button>
       </div>
 
-      <div style={styles.chat}>
-
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            style={{
-              ...styles.message,
-              ...(msg.role === "user"
-                ? styles.user
-                : styles.bot)
-            }}
-          >
-            {msg.text}
+      <div style={styles.dashboardGrid}>
+        <div style={styles.column}>
+          <div style={styles.sectionTitle}>Procedures</div>
+          <div style={styles.uploadSection}>
+            <UploadProcedure onSuccess={fetchStatus} />
           </div>
-        ))}
+          <div style={styles.uploadSection}>
+            <AskProcedure />
+          </div>
+        </div>
 
-        {loading && <div style={styles.bot}>Thinking...</div>}
+        <div style={styles.column}>
+          <div style={styles.sectionTitle}>Chat & Documents</div>
+          <div style={styles.chat}>
 
+            {messages.map((msg, i) => (
+              <div
+                key={i}
+                style={{
+                  ...styles.message,
+                  ...(msg.role === "user"
+                    ? styles.user
+                    : styles.bot)
+                }}
+              >
+                {msg.text}
+              </div>
+            ))}
+
+            {loading && <div style={styles.bot}>Thinking...</div>}
+
+          </div>
+
+          <div style={styles.inputRow}>
+            <input
+              style={styles.input}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              placeholder="Ask about your documents..."
+              onKeyDown={e => e.key === "Enter" && sendMessage()}
+            />
+
+            <button style={styles.button} onClick={sendMessage}>
+              Send
+            </button>
+          </div>
+
+          <div style={styles.uploadSection}>
+            <UploadPDF />
+          </div>
+        </div>
       </div>
-
-      <div style={styles.inputRow}>
-        <input
-          style={styles.input}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="Ask about your documents..."
-          onKeyDown={e => e.key === "Enter" && sendMessage()}
-        />
-
-        <button style={styles.button} onClick={sendMessage}>
-          Send
-        </button>
-      </div>
-      <UploadPDF />
     </div>
   );
 }
@@ -126,8 +147,28 @@ export default function App() {
 const styles = {
   container: {
     fontFamily: "Arial",
-    width: "600px",
+    width: "1200px",
+    maxWidth: "95vw",
     margin: "40px auto"
+  },
+
+  dashboardGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "20px",
+    alignItems: "start"
+  },
+
+  column: {
+    display: "flex",
+    flexDirection: "column"
+  },
+
+  sectionTitle: {
+    fontSize: "16px",
+    fontWeight: "bold",
+    marginBottom: "8px",
+    color: "#333"
   },
 
   statusBar: {
@@ -202,5 +243,9 @@ const styles = {
 
   button: {
     padding: "8px 16px"
+  },
+
+  uploadSection: {
+    marginTop: "20px"
   }
 };

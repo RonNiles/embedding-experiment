@@ -23,3 +23,33 @@ export async function getStatus() {
 
   return response.json();
 }
+
+export async function uploadProcedure(name, description, steps) {
+  const response = await fetch("http://127.0.0.1:5000/upload-procedure", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name,
+      description,
+      steps
+    })
+  });
+
+  return response.json();
+}
+
+export async function askProcedure(question) {
+  const response = await fetch("http://127.0.0.1:5000/ask-procedure", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      question
+    })
+  });
+
+  return response.json();
+}
