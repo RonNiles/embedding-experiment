@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM rag-python-base:v0.1
 
 WORKDIR /app
 

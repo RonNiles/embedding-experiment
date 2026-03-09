@@ -4,4 +4,5 @@ psycopg2-binary
 openai
 pgvector
 pdfminer.six
-flask_cors
+flask-cors
+sentence_transformers
