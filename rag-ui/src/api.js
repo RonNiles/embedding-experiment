@@ -53,3 +53,14 @@ export async function askProcedure(question) {
 
   return response.json();
 }
+
+export async function getRequests() {
+  const response = await fetch("http://127.0.0.1:5000/requests", {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json"
+    }
+  });
+
+  return response.json();
+}

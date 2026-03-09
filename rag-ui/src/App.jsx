@@ -3,6 +3,7 @@ import { askQuestion, getStatus } from "./api";
 import UploadPDF from "./UploadPDF";
 import UploadProcedure from "./UploadProcedure";
 import AskProcedure from "./AskProcedure";
+import BrowseRequests from "./BrowseRequests";
 
 const sessionId = crypto.randomUUID();
 
@@ -140,6 +141,10 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <div style={styles.browseSection}>
+        <BrowseRequests />
+      </div>
     </div>
   );
 }
@@ -247,5 +252,9 @@ const styles = {
 
   uploadSection: {
     marginTop: "20px"
+  },
+
+  browseSection: {
+    marginTop: "30px"
   }
 };

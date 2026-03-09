@@ -482,6 +482,24 @@ def status():
         }
     }), 200
 
+@app.route("/requests", methods=["GET"])
+def get_requests():
+    """Get all requests from the database ordered by timestamp descending"""
+    requests_data = Requests.query.order_by(Requests.timestamp.desc()).all()
+    
+    return jsonify({
+        "requests": [
+            {
+                "id": req.id,
+                "type": req.type,
+                "object": req.object,
+                "timestamp": req.timestamp.isoformat() if req.timestamp else None
+            }
+            for req in requests_data
+        ],
+        "total": len(requests_data)
+    }), 200
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 
