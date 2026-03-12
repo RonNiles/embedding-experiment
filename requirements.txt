@@ -3,6 +3,9 @@ Flask-SQLAlchemy
 psycopg2-binary
 openai
 pgvector
-pdfminer.six
+pdfplumber
+PyPDF2
+langchain
+langchain-text-splitters
 flask-cors
 sentence_transformers

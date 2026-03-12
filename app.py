@@ -10,8 +10,11 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 from openai import OpenAI
-from pdfminer.high_level import extract_pages
-from pdfminer.layout import LTTextContainer
+
+from PyPDF2 import PdfReader 
+from pdfplumber import pdf
+from langchain_text_splitters import RecursiveCharacterTextSplitter as RecursiveTextCharacterSplitter
+
 from sentence_transformers import SentenceTransformer
 from torch import cosine_similarity
 
@@ -76,49 +79,21 @@ class Procedures(db.Model):
     steps = db.Column(db.JSON)  # List of steps with details
     embedding = db.Column(Vector(384))
 
-def chunk_text(text, chunk_size=500, overlap=50):
-    import re
+def chunk_text(text, chunk_size=1000, overlap=50):
+    if not text:
+        return []
 
-    # Split into sentences using common punctuation
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    sentences = [s.strip() for s in sentences if s.strip()]
+    splitter = RecursiveTextCharacterSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        length_function=len,
+    )
+    split = splitter.split_text(text);
+    paragraphs = []
+    for text in split:
+        paragraphs.extend(text.split("\n"))
 
-    if not sentences:
-        return [text] if text else []
-
-    chunks = []
-    current_chunk = []
-    current_length = 0
-    overlap_buffer = []
-
-    for sentence in sentences:
-        sentence_length = len(sentence) + 1  # +1 for space
-
-        # Check if adding this sentence would exceed chunk_size
-        if current_length + sentence_length > chunk_size and current_chunk:
-            # Save current chunk
-            chunk_text_str = ' '.join(current_chunk)
-            chunks.append(chunk_text_str)
-
-            # Start overlap: keep last sentences if overlap is specified
-            if overlap > 0:
-                overlap_buffer = current_chunk.copy()
-                # Remove sentences from overlap_buffer until under overlap size
-                while overlap_buffer and len(' '.join(overlap_buffer)) > overlap:
-                    overlap_buffer.pop(0)
-
-            # Start new chunk with overlap
-            current_chunk = overlap_buffer.copy()
-            current_length = len(' '.join(current_chunk)) + 1 if current_chunk else 0
-
-        current_chunk.append(sentence)
-        current_length += sentence_length
-
-    # Add remaining chunk
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
-
-    return chunks
+    return [p for p in paragraphs if p.strip()]
 
 def save_message(session_id, role, content):
     msg = Message(session_id=session_id, role=role, content=content)
@@ -198,15 +173,12 @@ def get_embedding(text_input, source="unknown"):
 
 def extract_text_by_page(pdf_path):
     pages = []
-    for page_number, page_layout in enumerate(extract_pages(pdf_path), start=1):
-        page_text_parts = [
-            element.get_text()
-            for element in page_layout
-            if isinstance(element, LTTextContainer)
-        ]
-        page_text = "".join(page_text_parts).strip()
-        if page_text:
-            pages.append((page_number, page_text))
+    with open(pdf_path, "rb") as pdf_file:
+        reader = PdfReader(pdf_file)
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = (page.extract_text() or "").strip()
+            if page_text:
+                pages.append((page_number, page_text))
     return pages
 
 @app.route("/upload-procedure", methods=["POST"])
@@ -281,6 +253,7 @@ def upload_pdf():
         return {"error": "No extractable text found"}, 400
 
     total_chunks = 0
+    
     for page_number, page_text in pages:
         page_chunks = chunk_text(page_text)
         for chunk in page_chunks:
@@ -293,7 +266,6 @@ def upload_pdf():
             )
             db.session.add(doc)
             total_chunks += 1
-
     db.session.commit()
 
     return {"status": "indexed", "chunks": total_chunks, "pages": len(pages)}
