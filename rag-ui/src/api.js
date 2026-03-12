@@ -54,8 +54,13 @@ export async function askProcedure(question) {
   return response.json();
 }
 
-export async function getRequests() {
-  const response = await fetch("http://127.0.0.1:5000/requests", {
+export async function getRequests(page = 1, perPage = 25) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage)
+  });
+
+  const response = await fetch(`http://127.0.0.1:5000/requests?${params.toString()}`, {
     method: "GET",
     headers: {
       "Content-Type": "application/json"

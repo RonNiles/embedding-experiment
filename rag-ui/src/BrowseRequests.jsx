@@ -4,16 +4,27 @@ import { getRequests } from "./api";
 export default function BrowseRequests() {
   const [requests, setRequests] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [perPage, setPerPage] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [hasPreviousPage, setHasPreviousPage] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  async function fetchRequests() {
+  async function fetchRequests(pageToFetch = currentPage) {
     setLoading(true);
     setError(null);
     try {
-      const result = await getRequests();
+      const result = await getRequests(pageToFetch, perPage);
       setRequests(result.requests || []);
       setCurrentIndex(0);
+      setCurrentPage(result.page || pageToFetch);
+      setTotal(result.total || 0);
+      setTotalPages(result.total_pages || 0);
+      setHasNextPage(Boolean(result.has_next));
+      setHasPreviousPage(Boolean(result.has_prev));
     } catch (err) {
       console.error("Error fetching requests:", err);
       setError("Failed to fetch requests");
@@ -22,8 +33,8 @@ export default function BrowseRequests() {
   }
 
   useEffect(() => {
-    fetchRequests();
-  }, []);
+    fetchRequests(1);
+  }, [perPage]);
 
   function goToNext() {
     if (currentIndex < requests.length - 1) {
@@ -31,10 +42,18 @@ export default function BrowseRequests() {
     }
   }
 
+  function goToNext10() {
+    setCurrentIndex(Math.min(currentIndex + 10, requests.length - 1));
+  }
+
   function goToPrevious() {
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1);
     }
+  }
+
+  function goToPrevious10() {
+    setCurrentIndex(Math.max(currentIndex - 10, 0));
   }
 
   function goToFirst() {
@@ -45,15 +64,60 @@ export default function BrowseRequests() {
     setCurrentIndex(requests.length - 1);
   }
 
+  function goToPage(pageNumber) {
+    if (pageNumber < 1 || pageNumber > totalPages || pageNumber === currentPage) {
+      return;
+    }
+    fetchRequests(pageNumber);
+  }
+
+  function goToNextPage() {
+    if (hasNextPage) {
+      goToPage(currentPage + 1);
+    }
+  }
+
+  function goToPreviousPage() {
+    if (hasPreviousPage) {
+      goToPage(currentPage - 1);
+    }
+  }
+
+  function goToNext10Pages() {
+    goToPage(Math.min(currentPage + 10, totalPages));
+  }
+
+  function goToPrevious10Pages() {
+    goToPage(Math.max(currentPage - 10, 1));
+  }
+
   const currentRequest = requests[currentIndex];
 
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <h3 style={styles.title}>Browse Requests</h3>
-        <button style={styles.refreshButton} onClick={fetchRequests} disabled={loading}>
-          {loading ? "Loading..." : "↻ Refresh"}
-        </button>
+        <div style={styles.headerControls}>
+          <label style={styles.densityLabel} htmlFor="request-density">
+            Requests per page
+          </label>
+          <select
+            id="request-density"
+            style={styles.densitySelect}
+            value={perPage}
+            onChange={(event) => setPerPage(Number(event.target.value))}
+            disabled={loading}
+          >
+            {[10, 25, 50, 100].map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+          <button style={styles.refreshButton} onClick={() => fetchRequests(currentPage)} disabled={loading}>
+            {loading ? "Loading..." : "↻ Refresh"}
+          </button>
+        </div>
       </div>
 
       {error && <div style={styles.error}>{error}</div>}
@@ -66,12 +130,48 @@ export default function BrowseRequests() {
         <div>
           <div style={styles.navigation}>
             <div style={styles.navigationButtons}>
+              <button style={styles.navButton} onClick={() => goToPage(1)} disabled={currentPage === 1 || loading}>
+                ⟪ First Page
+              </button>
+              <button style={styles.navButton} onClick={goToPrevious10Pages} disabled={currentPage === 1 || loading}>
+                ← Previous 10 Pages
+              </button>
+              <button style={styles.navButton} onClick={goToPreviousPage} disabled={!hasPreviousPage || loading}>
+                ← Previous Page
+              </button>
+              <span style={styles.counter}>
+                Page {currentPage} of {totalPages || 1}
+              </span>
+              <button style={styles.navButton} onClick={goToNextPage} disabled={!hasNextPage || loading}>
+                Next Page →
+              </button>
+              <button style={styles.navButton} onClick={goToNext10Pages} disabled={currentPage === totalPages || loading}>
+                Next 10 Pages →
+              </button>
+              <button style={styles.navButton} onClick={() => goToPage(totalPages || 1)} disabled={currentPage === totalPages || loading}>
+                Last Page ⟫
+              </button>
+            </div>
+            <div style={styles.pageInfo}>
+              Total requests: {total} (showing up to {perPage} per page)
+            </div>
+          </div>
+
+          <div style={styles.navigation}>
+            <div style={styles.navigationButtons}>
               <button 
                 style={styles.navButton} 
                 onClick={goToFirst} 
                 disabled={currentIndex === 0}
               >
                 ⟪ First
+              </button>
+              <button 
+                style={styles.navButton} 
+                onClick={goToPrevious10} 
+                disabled={currentIndex === 0}
+              >
+                ← Previous 10
               </button>
               <button 
                 style={styles.navButton} 
@@ -89,6 +189,13 @@ export default function BrowseRequests() {
                 disabled={currentIndex === requests.length - 1}
               >
                 Next →
+              </button>
+              <button 
+                style={styles.navButton} 
+                onClick={goToNext10} 
+                disabled={currentIndex === requests.length - 1}
+              >
+                Next 10 →
               </button>
               <button 
                 style={styles.navButton} 
@@ -150,6 +257,25 @@ const styles = {
     fontSize: "18px",
     fontWeight: "bold"
   },
+  headerControls: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    flexWrap: "wrap",
+    justifyContent: "flex-end"
+  },
+  densityLabel: {
+    fontSize: "14px",
+    color: "#444",
+    fontWeight: "600"
+  },
+  densitySelect: {
+    padding: "6px 8px",
+    border: "1px solid #ccc",
+    borderRadius: "4px",
+    fontSize: "14px",
+    background: "#fff"
+  },
   refreshButton: {
     padding: "6px 12px",
     background: "#007bff",
@@ -178,7 +304,14 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    flexWrap: "wrap",
     gap: "8px"
+  },
+  pageInfo: {
+    textAlign: "center",
+    marginTop: "8px",
+    color: "#555",
+    fontSize: "14px"
   },
   navButton: {
     padding: "8px 12px",

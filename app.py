@@ -484,9 +484,27 @@ def status():
 
 @app.route("/requests", methods=["GET"])
 def get_requests():
-    """Get all requests from the database ordered by timestamp descending"""
-    requests_data = Requests.query.order_by(Requests.timestamp.desc()).all()
-    
+    """Get paginated requests ordered by timestamp descending."""
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 50))
+    except ValueError:
+        return jsonify({"error": "page and per_page must be integers"}), 400
+
+    if page < 1:
+        return jsonify({"error": "page must be greater than or equal to 1"}), 400
+
+    if per_page < 1 or per_page > 200:
+        return jsonify({"error": "per_page must be between 1 and 200"}), 400
+
+    pagination = Requests.query.order_by(Requests.timestamp.desc()).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False 
+    )
+
+    requests_data = pagination.items
+
     return jsonify({
         "requests": [
             {
@@ -497,7 +515,12 @@ def get_requests():
             }
             for req in requests_data
         ],
-        "total": len(requests_data)
+        "total": pagination.total,
+        "page": pagination.page,
+        "per_page": pagination.per_page,
+        "total_pages": pagination.pages,
+        "has_next": pagination.has_next,
+        "has_prev": pagination.has_prev
     }), 200
 
 if __name__ == "__main__":
