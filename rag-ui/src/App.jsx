@@ -6,6 +6,7 @@ import AskProcedure from "./AskProcedure";
 import BrowseRequests from "./BrowseRequests";
 
 const sessionId = crypto.randomUUID();
+const appJsxModifiedAt = import.meta.env.VITE_APP_JSX_MTIME || "unknown";
 
 export default function App() {
 
@@ -75,8 +76,10 @@ export default function App() {
           ) : status ? (
             <>
               <span style={styles.statusItem}>Status: <strong>{status.status}</strong></span>
+              <span style={styles.statusItem}>App.jsx Modified: <strong>{appJsxModifiedAt}</strong></span>
               <span style={styles.statusItem}>Messages: <strong>{status.tables?.message || 0}</strong></span>
               <span style={styles.statusItem}>Documents: <strong>{status.tables?.document || 0}</strong></span>
+              <span style={styles.statusItem}>Embeddings: <strong>{status.tables?.embeddings || 0}</strong></span>
               <span style={styles.statusItem}>Requests: <strong>{status.tables?.requests || 0}</strong></span>
               <span style={styles.statusItem}>Procedures: <strong>{status.tables?.procedures || 0}</strong></span>
             </>

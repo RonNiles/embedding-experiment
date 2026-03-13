@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import hashlib
 import logging
 import os
 from uuid import uuid4
@@ -57,13 +58,24 @@ class Message(db.Model):
     content = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+class Embedding(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    hash = db.Column(db.String(64), unique=True, index=True)
+    content = db.Column(db.Text, nullable=False)
+    embedding = db.Column(Vector(EMBEDDING_DIM))
+    tsv = db.Column(TSVECTOR)
+
+class PDFDocument(db.Model):
+    __tablename__ = "documents"
+    id = db.Column(db.Integer, primary_key=True)
+    hash = db.Column(db.String(64), unique=True, index=True)
+
 class Document(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     source = db.Column(db.String(255))  # PDF filename
     page_number = db.Column(db.Integer)
-    content = db.Column(db.Text, nullable=False)
-    embedding = db.Column(Vector(EMBEDDING_DIM))
-    tsv = db.Column(TSVECTOR)
+    embedding_id = db.Column(db.Integer, db.ForeignKey("embedding.id"))
+    doc_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=True)
 
 
 class Requests(db.Model):
@@ -119,6 +131,18 @@ def save_request_object(payload_type, payload_object):
     db.session.add(req)
     db.session.commit()
 
+
+def compute_content_hash(content):
+    if content is None:
+        return None
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def find_embedding_by_hash(content_hash):
+    if not content_hash:
+        return None
+    return Embedding.query.filter_by(hash=content_hash).first()
+
 # -------------------------
 # Initialize DB
 # -------------------------
@@ -130,7 +154,49 @@ def setup():
     db.session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     db.session.commit()
     db.create_all()
-    db.session.execute(text("ALTER TABLE document ADD COLUMN IF NOT EXISTS page_number INTEGER"))
+
+    # One-time migration: if document still has the old schema (hash column
+    # present), migrate content/hash/embedding/tsv into the embedding table
+    # and replace them with an embedding_id FK.
+    db.session.execute(text("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'document' AND column_name = 'hash'
+            ) THEN
+                -- backfill hashes for any rows that are still missing one
+                UPDATE document
+                SET hash = md5(content)
+                WHERE hash IS NULL AND content IS NOT NULL;
+
+                -- populate embedding table from old document rows
+                INSERT INTO embedding (hash, content, embedding, tsv)
+                SELECT DISTINCT ON (hash) hash, content, embedding,
+                       to_tsvector('english', content)
+                FROM document
+                WHERE hash IS NOT NULL
+                ON CONFLICT (hash) DO NOTHING;
+
+                -- link documents to their embedding rows
+                ALTER TABLE document
+                    ADD COLUMN IF NOT EXISTS embedding_id INTEGER;
+
+                UPDATE document d
+                SET embedding_id = e.id
+                FROM embedding e
+                WHERE e.hash = d.hash AND d.embedding_id IS NULL;
+
+                -- drop the now-redundant columns
+                ALTER TABLE document DROP COLUMN IF EXISTS content;
+                ALTER TABLE document DROP COLUMN IF EXISTS hash;
+                ALTER TABLE document DROP COLUMN IF EXISTS embedding;
+                ALTER TABLE document DROP COLUMN IF EXISTS tsv;
+            END IF;
+            -- add doc_id if it doesn't exist yet (existing rows left NULL)
+            ALTER TABLE document ADD COLUMN IF NOT EXISTS doc_id INTEGER REFERENCES documents(id);
+        END $$;
+    """))
     db.session.commit()
 
 
@@ -246,29 +312,69 @@ def upload_pdf():
     filepath = f"/tmp/{filename}"
     file.save(filepath)
 
+    # Hash the entire file to detect duplicate uploads
+    with open(filepath, "rb") as f:
+        file_hash = hashlib.sha256(f.read()).hexdigest()
+
+    existing_pdf_doc = PDFDocument.query.filter_by(hash=file_hash).first()
+    if existing_pdf_doc:
+        return {
+            "status": "duplicate",
+            "message": "This file has already been processed.",
+            "doc_id": existing_pdf_doc.id
+        }, 200
+
+    # Register the file in the documents table
+    pdf_doc = PDFDocument(hash=file_hash)
+    db.session.add(pdf_doc)
+    db.session.flush()  # get pdf_doc.id before chunk inserts
+
     # Extract text by page
     pages = extract_text_by_page(filepath)
 
     if not pages:
+        db.session.rollback()
         return {"error": "No extractable text found"}, 400
 
     total_chunks = 0
-    
+    deduped_chunks = 0
+
     for page_number, page_text in pages:
         page_chunks = chunk_text(page_text)
         for chunk in page_chunks:
-            embedding = get_embedding(chunk, source="upload_pdf")
-            doc = Document(
-                source=filename,
-                page_number=page_number,
-                content=chunk,
-                embedding=embedding
+            content_hash = compute_content_hash(chunk)
+            existing_emb = find_embedding_by_hash(content_hash)
+            if existing_emb:
+                emb_id = existing_emb.id
+                deduped_chunks += 1
+            else:
+                vector = get_embedding(chunk, source="upload_pdf")
+                emb_result = db.session.execute(
+                    text("""
+                    INSERT INTO embedding (hash, content, embedding, tsv)
+                    VALUES (:hash, :content, :embedding, to_tsvector('english', :content))
+                    RETURNING id
+                    """),
+                    {"hash": content_hash, "content": chunk, "embedding": str(vector)}
+                )
+                emb_id = emb_result.scalar()
+                total_chunks += 1
+            db.session.execute(
+                text("""
+                INSERT INTO document (source, page_number, embedding_id, doc_id)
+                VALUES (:source, :page_number, :embedding_id, :doc_id)
+                """),
+                {"source": filename, "page_number": page_number, "embedding_id": emb_id, "doc_id": pdf_doc.id}
             )
-            db.session.add(doc)
-            total_chunks += 1
     db.session.commit()
 
-    return {"status": "indexed", "chunks": total_chunks, "pages": len(pages)}
+    return {
+        "status": "indexed",
+        "chunks": total_chunks,
+        "pages": len(pages),
+        "deduped_chunks": deduped_chunks,
+        "doc_id": pdf_doc.id
+    }
 
 
 @app.route("/documents", methods=["POST"])
@@ -276,30 +382,44 @@ def add_document():
     data = request.json
     content = data["content"]
 
-    embedding = get_embedding(content, source="documents")
+    content_hash = compute_content_hash(content)
+    existing_emb = find_embedding_by_hash(content_hash)
+    if existing_emb:
+        doc = Document.query.filter_by(embedding_id=existing_emb.id).first()
+        return jsonify({"id": doc.id if doc else None, "deduped": True})
+
+    vector = get_embedding(content, source="documents")
     source = data.get("source", "")  # Get the source if provided
     page_number = data.get("page_number")
 
-    result = db.session.execute(
+    emb_result = db.session.execute(
         text("""
-        INSERT INTO document (content, embedding, source, page_number, tsv)
-        VALUES (
-            :content,
-            :embedding,
-            :source,
-            :page_number,
-            to_tsvector('english', :content)
-        )
+        INSERT INTO embedding (hash, content, embedding, tsv)
+        VALUES (:hash, :content, :embedding, to_tsvector('english', :content))
         RETURNING id
-    """),
-    {
-        "content": content,
-        "embedding": embedding,
-        "source": source,
-        "page_number": page_number
-    })
+        """),
+        {
+            "hash": content_hash,
+            "content": content,
+            "embedding": str(vector)
+        }
+    )
+    emb_id = emb_result.scalar()
+
+    doc_result = db.session.execute(
+        text("""
+        INSERT INTO document (source, page_number, embedding_id)
+        VALUES (:source, :page_number, :embedding_id)
+        RETURNING id
+        """),
+        {
+            "source": source,
+            "page_number": page_number,
+            "embedding_id": emb_id
+        }
+    )
     db.session.commit()
-    doc_id = result.scalar()
+    doc_id = doc_result.scalar()
 
     return jsonify({"id": doc_id})
 
@@ -379,22 +499,23 @@ def get_hybrid_search_results(query_embedding, query, top_k=5):
     results = db.session.execute(
         text("""
         SELECT
-            id,
-            source,
-            content,
+            d.id,
+            d.source,
+            e.content,
 
-            1 - (embedding <=> (:embedding)::vector) AS semantic_score,
+            1 - (e.embedding <=> (:embedding)::vector) AS semantic_score,
 
-            ts_rank(tsv, plainto_tsquery(:query)) AS keyword_score,
+            ts_rank(e.tsv, plainto_tsquery(:query)) AS keyword_score,
 
-            (1 - (embedding <=> (:embedding)::vector)) +
-            ts_rank(tsv, plainto_tsquery(:query)) AS hybrid_score
+            (1 - (e.embedding <=> (:embedding)::vector)) +
+            ts_rank(e.tsv, plainto_tsquery(:query)) AS hybrid_score
 
-        FROM document
+        FROM document d
+        JOIN embedding e ON e.id = d.embedding_id
 
         WHERE
-            tsv @@ plainto_tsquery(:query)
-            OR embedding <=> (:embedding)::vector < 0.8
+            e.tsv @@ plainto_tsquery(:query)
+            OR e.embedding <=> (:embedding)::vector < 0.8
 
         ORDER BY hybrid_score DESC
 
@@ -440,7 +561,8 @@ def health():
 @app.route("/status", methods=["GET"])
 def status():
     message_count = db.session.execute(text("SELECT COUNT(*) FROM message")).scalar()
-    document_count = db.session.execute(text("SELECT COUNT(*) FROM document")).scalar()
+    document_count = db.session.execute(text("SELECT COUNT(DISTINCT source) FROM document")).scalar()
+    embeddings_count = db.session.execute(text("SELECT COUNT(*) FROM embedding")).scalar()
     requests_count = db.session.execute(text("SELECT COUNT(*) FROM requests")).scalar()
     procedures_count = db.session.execute(text("SELECT COUNT(*) FROM procedures")).scalar()
 
@@ -449,6 +571,7 @@ def status():
         "tables": {
             "message": message_count,
             "document": document_count,
+            "embeddings": embeddings_count,
             "requests": requests_count,
             "procedures": procedures_count
         }
